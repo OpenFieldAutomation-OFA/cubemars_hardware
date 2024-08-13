@@ -5,9 +5,12 @@ This package contains a [ros2_control](https://control.ros.org/master/index.html
 ## Motor Setup
 The package assumes that the motor is setup in Servo Mode.
 
-To adjust the parameters you can connect the motor with the R-link and use the "Upper Computer" program. All the informations are on the CubeMars [Technical Support and Download page](https://www.cubemars.com/article.php?id=261). Example parameters can be found in [`.params`](./.params/).
+To adjust the parameters you can connect the motor with the R-link and use the "Upper Computer" program. All the informations are on the CubeMars [Technical Support and Download page](https://www.cubemars.com/article.php?id=261).
 
 Make sure that you enable "Send status over CAN" (called `send_can_status` in AppParams). Otherwise the state interfaces will not work proberly. Also, the upload frequency of the actuators should be at least as fast as the update rate of the controller manager. If no CAN message is received during one update loop you will get a warning in the `read` function.
+
+Example motor parameters can be found in [our main repo](https://github.com/OpenFieldAutomation-OFA/ros-weed-control/tree/main/.motor_params/cubemars).
+
 
 ## Hardware Interfaces
 The following command interfaces are published:
@@ -28,11 +31,13 @@ The hardware interfaces can also be listed by starting the controller manager an
 ros2 control list_hardware_interfaces
 ```
 
-## Parameters
-Hardware:
+## `ros2_control` Parameters
+An example `ros2_control` URDF config with this hardware interface can be found in [our main repo](https://github.com/OpenFieldAutomation-OFA/ros-weed-control/blob/main/ofa_moveit_config/ros2_control/ofa_robot.ros2_control.xacro).
+
+`hardware` tag:
 - `can_interface`: name of the Linux CAN interface, e. g. `can0`
 
-Joint:
+`joint` tag:
 - `can_id`: CAN ID of the actuator
 - `pole_pairs`: Pole pairs. Used for unit conversion
 - `gear_ratio`: Gear ratio. Used for unit conversion
