@@ -1,6 +1,6 @@
 # cubemars_hardware
 
-This package contains the [ros2_control](https://control.ros.org/master/index.html) hardware interface to control the CubeMars AK series motors with a  `SystemInterface`. It was tested on two AK70-10.
+This package contains a [ros2_control](https://control.ros.org/master/index.html) hardware interface to control the CubeMars AK series motors with a  `SystemInterface`. It was tested on two AK70-10.
 
 ## Motor Setup
 The package assumes that the motor is setup in Servo Mode.
