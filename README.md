@@ -49,7 +49,7 @@ An example `ros2_control` URDF config with this hardware interface can be found 
 - `read_only`: OPTIONAL. If set to 1, the current position is logged and no commands are sent to the motors.
 
 ## Encoder Offset
-For single-encoder motors there will most likely be an offset between your origin and the zero of the encoder after shutting the motor off and on. You can compensate for this offset by using `enc_off`. Note that in order for `enc_off` to work properly, the motor has to be very close to the origin on startup, otherwise the encoder value will wrap around.
+For single-encoder motors there will most likely be an offset between your desired origin and the zero of the encoder on startup. You can compensate for this offset by using `enc_off`. Note that in order for `enc_off` to work properly, the motor has to be very close to the origin on startup, otherwise the encoder value will wrap around.
 
 For motors with an output encoder you should be able to manually set the origin just once using the following command (replace `XX` with the hexadecimal representation of the CAN ID).
 ```
@@ -60,3 +60,4 @@ cansend can0 000005XX#01
 The `position` command interface will by default use the Position Mode (control mode 4) where the motor runs to the specified position at maximum speed and acceleration. If you want to use the Position-Speed Loop Mode (control mode 6) you have to specify BOTH `vel_limit` and `acc_limit`. This will limit the maximum acceleration and velocity of the motor (trajectory planning). This does not work well together with a `joint_trajectory_controller`.
 
 Note that the limit parameters have no effect if only one is set or if you don't use the `position` command interface.
+
