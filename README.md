@@ -11,6 +11,17 @@ Make sure that you enable "Send status over CAN" (called `send_can_status` in Ap
 
 Example motor settings can be found in [our main repo](https://github.com/OpenFieldAutomation-OFA/ros-weed-control/tree/main/.motor_params/cubemars).
 
+## SocketCAN
+SocketCAN is used to handle the communication between the motors and the Linux system. You need a working CAN interface for this to work. The exact setup will depend on your hardware but it will include initializing the interface.
+```bash
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+```
+When typing `ifconfig` you should now see the CAN interface. You can also read all incoming messages.
+```bash
+sudo apt install can-utils
+candump can0
+```
 
 ## Hardware Interfaces
 The following command interfaces are published:
