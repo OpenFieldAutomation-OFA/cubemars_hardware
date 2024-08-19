@@ -5,7 +5,7 @@ This package contains a [ros2_control](https://control.ros.org/master/index.html
 ## Motor Setup
 The package assumes that the motor is setup in Servo Mode.
 
-To adjust the motor settings you can connect the motor with the R-link and use the "Upper Computer" program. All the informations are on the CubeMars [Technical Support and Download page](https://www.cubemars.com/article.php?id=261).
+To adjust the motor settings you can connect the motor with the R-link and use the "Upper Computer" program. All informations are on the CubeMars [Technical Support and Download page](https://www.cubemars.com/article.php?id=261).
 
 Make sure that you enable "Send status over CAN" (called `send_can_status` in AppParams). Otherwise the state interfaces will not work proberly. Also, the upload frequency of the actuators should be at least as fast as the update rate of the controller manager. If no CAN message is received during one update loop you will get a warning in the `read` function.
 
