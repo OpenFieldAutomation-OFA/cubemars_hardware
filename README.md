@@ -54,7 +54,7 @@ An example `ros2_control` URDF config with this hardware interface can be found 
 - `gear_ratio`: Gear ratio. Used for unit conversion
 - `kt`: Torque constant. Used to convert current to torque
 - `trq_limit`: OPTIONAL. Torque limit. If the limit is reached the motor is disabled and the hardware interface is shutdown.
-- `enc_off`: OPTIONAL. Encoder offset in rad. (see explanation below)
+- `enc_off`: OPTIONAL. Encoder offset in $\text{rad}$. (see explanation below)
 - `vel_limit`: OPTIONAL. Velocity limit in $\text{rad}/\text{s}$. (see explanation below)
 - `acc_limit`: OPTIONAL. Acceleration limit in $\text{rad}/\text{s}^2$. (see explanation below)
 - `read_only`: OPTIONAL. If set to 1, the current position is logged and no commands are sent to the motors.
