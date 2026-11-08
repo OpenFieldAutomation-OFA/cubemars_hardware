@@ -422,7 +422,11 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
         
         // disable motor
         std::uint8_t data[4] = {0, 0, 0, 0};
-        can_.write_message(can_ids_[i] | CURRENT_LOOP << 8, data, 4);
+        if (!can_.write_message(can_ids_[i] | CURRENT_LOOP << 8, data, 4)) {
+          RCLCPP_ERROR(
+            rclcpp::get_logger("CubeMarsSystemHardware"),
+            "Failed to send zero-current command for joint %lu.", i);
+        }
         
         return hardware_interface::return_type::ERROR;
       }
@@ -447,6 +451,22 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
 hardware_interface::return_type CubeMarsSystemHardware::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
+  const auto send_command =
+    [this](std::size_t joint_index, std::uint32_t id, const std::uint8_t data[], std::uint8_t len) {
+      RCLCPP_WARN(
+        rclcpp::get_logger("CubeMarsSystemHardware"),
+        "TX joint=%lu CAN ID=0x%03x len=%u data=%02x %02x %02x %02x",
+        joint_index, id, len, data[0], data[1], data[2], data[3]);
+      if (can_.write_message(id, data, len)) {
+        return true;
+      }
+      RCLCPP_ERROR(
+        rclcpp::get_logger("CubeMarsSystemHardware"),
+        "Failed to transmit CAN command for joint %lu (ID 0x%03x).",
+        joint_index, id);
+      return false;
+    };
+
   for (std::size_t i = 0; i < info_.joints.size(); i++)
   {
     if (!read_only_[i])
@@ -455,9 +475,9 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
       {
         case UNDEFINED:
         {
-            // RCLCPP_INFO(
-            //   rclcpp::get_logger("CubeMarsSystemHardware"),
-            //   "Nothing is using the hardware interface!");
+            RCLCPP_INFO(
+              rclcpp::get_logger("CubeMarsSystemHardware"),
+              "Nothing is using the hardware interface!");
             break;
         }
         case CURRENT_LOOP:
@@ -491,7 +511,9 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
             data[2] = current >> 8;
             data[3] = current;
 
-            can_.write_message(can_ids_[i] | CURRENT_LOOP << 8, data, 4);
+            if (!send_command(i, can_ids_[i] | (CURRENT_LOOP << 8), data, 4)) {
+              return hardware_interface::return_type::ERROR;
+            }
           }
           break;
         }
@@ -520,7 +542,9 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
             data[2] = speed >> 8;
             data[3] = speed;
 
-            can_.write_message(can_ids_[i] | SPEED_LOOP << 8, data, 4);
+            if (!send_command(i, can_ids_[i] | (SPEED_LOOP << 8), data, 4)) {
+              return hardware_interface::return_type::ERROR;
+            }
           }
           break;
         }
@@ -546,9 +570,12 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
             data[2] = position >> 8;
             data[3] = position;
 
-            can_.write_message(can_ids_[i] | POSITION_LOOP << 8, data, 4);
+            if (!send_command(i, can_ids_[i] | (POSITION_LOOP << 8), data, 4)) {
+              return hardware_interface::return_type::ERROR;
+            }
           }
           break;
+        }
         case POSITION_SPEED_LOOP:
         {
           if (!std::isnan(hw_commands_positions_[i]))
@@ -580,14 +607,15 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
             data[6] = acc >> 8;
             data[7] = acc;
 
-            can_.write_message(can_ids_[i] | POSITION_SPEED_LOOP << 8, data, 8);
+            if (!send_command(i, can_ids_[i] | (POSITION_SPEED_LOOP << 8), data, 8)) {
+              return hardware_interface::return_type::ERROR;
+            }
           }
           break;
         }
         }
       }
     }
-  }
 
   return hardware_interface::return_type::OK;
 }

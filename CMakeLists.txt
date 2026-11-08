@@ -14,6 +14,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
 )
 find_package(ament_cmake REQUIRED)
 add_subdirectory(pi3hat EXCLUDE_FROM_ALL)
+set_target_properties(pi3hat_internal PROPERTIES POSITION_INDEPENDENT_CODE ON)
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
