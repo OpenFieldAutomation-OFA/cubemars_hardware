@@ -11,17 +11,25 @@ Make sure that you enable "Send status over CAN" (called `send_can_status` in Ap
 
 Example motor settings can be found in [our main repo](https://github.com/OpenFieldAutomation-OFA/ros-weed-control/tree/main/.motor_params/cubemars).
 
-## SocketCAN
-SocketCAN is used to handle the communication between the motors and the Linux system. You need a working CAN interface for this to work. The exact setup will depend on your hardware but you will at least have to intitialize the interface.
-```bash
-sudo ip link set can0 type can bitrate 1000000
-sudo ip link set can0 up
-```
-When typing `ifconfig` you should then see the CAN interface. You can use `can-utils` to read all incoming messages.
-```bash
-sudo apt install can-utils
-candump can0
-```
+## mjbots pi3hat
+The package uses the mjbots pi3hat C++ library instead of SocketCAN. The
+vendored pi3hat submodule is the Johns Hopkins fork, whose flashed firmware
+uses extended CAN frames for all CAN identifiers. Configure the CubeMars
+motors for servo mode, 1 Mbit/s CAN, and enabled CAN status responses.
+
+The `can_channel` parameter selects the pi3hat connector:
+
+| Connector | Channel |
+|-----------|---------|
+| JC1       | 1       |
+| JC2       | 2       |
+| JC3       | 3       |
+| JC4       | 4       |
+| JC5       | 5       |
+
+The pi3hat driver accesses Raspberry Pi hardware directly and normally
+requires root privileges. Build and run the hardware interface on the
+Raspberry Pi.
 
 ## Hardware Interface
 The following command interfaces are published:
@@ -46,7 +54,7 @@ ros2 control list_hardware_interfaces
 An example `ros2_control` URDF config with this hardware interface can be found in [our main repo](https://github.com/OpenFieldAutomation-OFA/ros-weed-control/blob/main/ofa_moveit_config/ros2_control/ofa_robot.ros2_control.xacro).
 
 `hardware` tag:
-- `can_interface`: name of the Linux CAN interface, e. g. `can0`
+- `can_channel`: pi3hat CAN channel, 1 through 5
 
 `joint` tag:
 - `can_id`: CAN ID of the actuator
@@ -54,6 +62,9 @@ An example `ros2_control` URDF config with this hardware interface can be found 
 - `gear_ratio`: Gear ratio. Used for unit conversion
 - `kt`: Torque constant. Used to convert current to torque
 - `trq_limit`: OPTIONAL. Torque limit. If the limit is reached the motor is disabled and the hardware interface is shutdown.
+- `max_current`: OPTIONAL. Maximum commanded motor current in amperes. Defaults to 18 A.
+- `max_torque`: OPTIONAL. Maximum commanded/output torque in Nm. Defaults to 18 Nm.
+- `max_velocity`: OPTIONAL. Maximum commanded joint velocity in rad/s. Defaults to 300 rpm (approximately 31.4 rad/s). Position-only mode cannot enforce this limit; use both `vel_limit` and `acc_limit` to select position-speed mode.
 - `enc_off`: OPTIONAL. Encoder offset in $\text{rad}$. (see explanation below)
 - `vel_limit`: OPTIONAL. Velocity limit in $\text{rad}/\text{s}$. (see explanation below)
 - `acc_limit`: OPTIONAL. Acceleration limit in $\text{rad}/\text{s}^2$. (see explanation below)

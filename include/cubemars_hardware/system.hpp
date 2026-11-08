@@ -84,11 +84,14 @@ private:
   std::vector<double> torque_constants_;
   std::vector<double> enc_offs_;
   std::vector<double> trq_limits_;
+  std::vector<double> max_current_limits_;
+  std::vector<double> max_torque_limits_;
+  std::vector<double> max_velocity_limits_;
   std::vector<std::pair<std::int16_t, std::int16_t>> limits_;
   std::vector<bool> read_only_;
 
   CanSocket can_;
-  std::string can_itf_;
+  int can_bus_{0};
   std::vector<std::uint32_t> can_ids_;
 
   enum control_mode_t : std::uint8_t

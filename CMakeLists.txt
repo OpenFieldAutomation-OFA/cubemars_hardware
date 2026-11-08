@@ -13,6 +13,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp_lifecycle
 )
 find_package(ament_cmake REQUIRED)
+add_subdirectory(pi3hat EXCLUDE_FROM_ALL)
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
@@ -27,11 +28,13 @@ add_library(
 target_compile_features(cubemars_hardware PUBLIC cxx_std_17)
 target_include_directories(cubemars_hardware PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include/cubemars_hardware>)
+  $<INSTALL_INTERFACE:include/cubemars_hardware>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/pi3hat/lib/cpp>)
 ament_target_dependencies(
   cubemars_hardware PUBLIC
   ${THIS_PACKAGE_INCLUDE_DEPENDS}
 )
+target_link_libraries(cubemars_hardware PRIVATE pi3hat::pi3hat)
 
 # Causes the visibility macros to use dllexport rather than dllimport,
 # which is appropriate when building the dll but not consuming it.

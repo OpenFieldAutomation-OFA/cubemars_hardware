@@ -1,6 +1,10 @@
 #include "cubemars_hardware/system.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -8,6 +12,28 @@
 
 namespace cubemars_hardware
 {
+namespace
+{
+constexpr double kDefaultMaxCurrent = 18.0;
+constexpr double kDefaultMaxTorque = 18.0;
+constexpr double kDefaultMaxVelocity = 300.0 * 2.0 * M_PI / 60.0;
+
+double get_joint_limit(
+  const hardware_interface::ComponentInfo & joint,
+  const char * parameter,
+  double default_value)
+{
+  if (joint.parameters.count(parameter) == 0) {
+    return default_value;
+  }
+  const double value = std::stod(joint.parameters.at(parameter));
+  if (!std::isfinite(value) || value <= 0.0) {
+    throw std::invalid_argument(std::string("invalid ") + parameter + " for joint " + joint.name);
+  }
+  return value;
+}
+}
+
 CubeMarsSystemHardware::~CubeMarsSystemHardware()
 {
   // If the controller manager is shutdown via Ctrl + C
@@ -24,12 +50,12 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  if (info_.hardware_parameters.count("can_interface") != 0) {
-    can_itf_ = info_.hardware_parameters.at("can_interface");
+  if (info_.hardware_parameters.count("can_channel") != 0) {
+    can_bus_ = std::stoi(info_.hardware_parameters.at("can_channel"));
   } else {
     RCLCPP_FATAL(
       rclcpp::get_logger("CubeMarsSystemHardware"),
-      "No can_interface specified in URDF");
+      "No can_channel specified in URDF");
     return hardware_interface::CallbackReturn::ERROR;
   }
 
@@ -52,9 +78,23 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
     {
       can_ids_.emplace_back(std::stoul(joint.parameters.at("can_id")));
       torque_constants_.emplace_back(std::stod(joint.parameters.at("kt")));
+      const double gear_ratio = std::stod(joint.parameters.at("gear_ratio"));
       double erpm_conversion = std::stoi(joint.parameters.at("pole_pairs")) * 
-        std::stoi(joint.parameters.at("gear_ratio")) * 60 / (2 * M_PI);
+        gear_ratio * 60 / (2 * M_PI);
       erpm_conversions_.emplace_back(erpm_conversion);
+      try {
+        max_current_limits_.emplace_back(get_joint_limit(
+          joint, "max_current", kDefaultMaxCurrent));
+        max_torque_limits_.emplace_back(get_joint_limit(
+          joint, "max_torque", kDefaultMaxTorque));
+        max_velocity_limits_.emplace_back(get_joint_limit(
+          joint, "max_velocity", kDefaultMaxVelocity));
+      } catch (const std::exception & exception) {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("CubeMarsSystemHardware"),
+          "%s", exception.what());
+        return hardware_interface::CallbackReturn::ERROR;
+      }
 
       if (joint.parameters.count("acc_limit") != 0 &&
         joint.parameters.count("vel_limit") != 0)
@@ -106,7 +146,7 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
     }
     else
     {
-      trq_limits_.emplace_back(0);
+      trq_limits_.emplace_back(max_torque_limits_.back());
     }
 
     if (joint.parameters.count("read_only") != 0 && std::stoi(joint.parameters.at("read_only")) == 1)
@@ -125,7 +165,7 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
 hardware_interface::CallbackReturn CubeMarsSystemHardware::on_configure(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  const hardware_interface::CallbackReturn result = can_.connect(can_itf_, can_ids_, 0xFFU)
+  const hardware_interface::CallbackReturn result = can_.connect(can_bus_, can_ids_, 0xFFU)
                                                       ? hardware_interface::CallbackReturn::SUCCESS
                                                       : hardware_interface::CallbackReturn::FAILURE;
 
@@ -303,6 +343,11 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
 
   std::int16_t pos_int;
 
+  // Poll independently of command transmission so read-only joints receive feedback.
+  if (!can_.poll()) {
+    return hardware_interface::return_type::ERROR;
+  }
+
   // read all buffered CAN messages
   while (can_.read_nonblocking(read_id, read_data, read_len))
   {
@@ -419,7 +464,16 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
         {
           if (!std::isnan(hw_commands_efforts_[i]))
           {
-            std::int32_t current = hw_commands_efforts_[i] * 1000 / torque_constants_[i];
+            const double limited_effort = std::clamp(
+              hw_commands_efforts_[i], -max_torque_limits_[i], max_torque_limits_[i]);
+            const double requested_current = limited_effort * 1000 /
+              (torque_constants_[i] * std::stod(info_.joints[i].parameters.at("gear_ratio")));
+            const double current_limit_from_torque =
+              max_torque_limits_[i] * 1000 / torque_constants_[i];
+            const double limited_current = std::clamp(
+              requested_current, -max_current_limits_[i],
+              std::min(max_current_limits_[i], current_limit_from_torque));
+            std::int32_t current = static_cast<std::int32_t>(limited_current);
             if (std::abs(current) >= 60000)
             {
               RCLCPP_ERROR(
@@ -445,7 +499,10 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
         {
           if (!std::isnan(hw_commands_velocities_[i]))
           {
-            std::int32_t speed = hw_commands_velocities_[i] * erpm_conversions_[i];
+            const double limited_velocity = std::clamp(
+              hw_commands_velocities_[i], -max_velocity_limits_[i], max_velocity_limits_[i]);
+            std::int32_t speed = static_cast<std::int32_t>(
+              limited_velocity * erpm_conversions_[i]);
             if (std::abs(speed) >= 100000)
             {
               RCLCPP_ERROR(
@@ -497,7 +554,9 @@ hardware_interface::return_type CubeMarsSystemHardware::write(
           if (!std::isnan(hw_commands_positions_[i]))
           {
             std::int32_t position = (hw_commands_positions_[i] + enc_offs_[i]) * 10000 * 180 / M_PI;
-            std::int16_t vel = limits_[i].first;
+            const double max_velocity_erpm = max_velocity_limits_[i] * erpm_conversions_[i];
+            std::int16_t vel = static_cast<std::int16_t>(
+              std::min<double>(limits_[i].first, max_velocity_erpm));
             std::int16_t acc = limits_[i].second;
             if (std::abs(position) >= 360000000)
             {

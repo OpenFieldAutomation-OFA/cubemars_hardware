@@ -1,0 +1,3 @@
+[submodule "pi3hat"]
+	path = pi3hat
+	url = https://github.com/Johns-Hopkins-URC-Mars-Rover/pi3hat.git

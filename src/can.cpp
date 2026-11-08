@@ -1,116 +1,145 @@
 #include "cubemars_hardware/can.hpp"
 
-#include <linux/can.h>
-#include <linux/can/raw.h>
-#include <net/if.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <algorithm>
+#include <cstring>
 
 #include "rclcpp/rclcpp.hpp"
 
 namespace cubemars_hardware
 {
-bool CanSocket::connect(std::string can_itf, const std::vector<canid_t> & can_ids, canid_t can_mask)
+namespace
 {
-  // open socket
-  socket_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-  if (socket_ < 0) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("CubeMarsSystemHardware"),
-      "Could not create socket");
+constexpr const char * kLogger = "CubeMarsSystemHardware";
+constexpr std::size_t kMaxCanFrames = 32;
+
+mjbots::pi3hat::Pi3Hat::Configuration make_configuration(int can_bus)
+{
+  mjbots::pi3hat::Pi3Hat::CanConfiguration can_config;
+  can_config.slow_bitrate = 1000000;
+  can_config.fast_bitrate = 1000000;
+  can_config.fdcan_frame = false;
+  can_config.bitrate_switch = false;
+  can_config.automatic_retransmission = true;
+
+  mjbots::pi3hat::Pi3Hat::Configuration configuration;
+  configuration.can[can_bus - 1] = can_config;
+  return configuration;
+}
+}
+
+bool CanSocket::connect(
+  int can_bus,
+  const std::vector<std::uint32_t> & /*can_ids*/,
+  std::uint32_t can_mask)
+{
+  if (can_bus < 1 || can_bus > 5) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "Invalid pi3hat CAN bus: %d", can_bus);
     return false;
   }
 
-  // get CAN interface index
-  struct ifreq ifr;
-  strcpy(ifr.ifr_name, can_itf.c_str());
-  ioctl(socket_, SIOCGIFINDEX, &ifr);
-
-  // bind CAN interface
-  struct sockaddr_can addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.can_family = AF_CAN;
-  addr.can_ifindex = ifr.ifr_ifindex;
-  if (bind(socket_, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-  {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("CubeMarsSystemHardware"),
-      "Could not bind CAN interface");
-    return false;
-  }
-
-  // filter CAN IDs
+  can_bus_ = can_bus;
   can_mask_ = can_mask;
-  struct can_filter rfilter[can_ids.size()];
-  for (std::size_t i = 0; i < can_ids.size(); i++)
-  {
-    rfilter[i].can_id = can_ids[i];
-    rfilter[i].can_mask = can_mask_;
-  }
-  setsockopt(socket_, SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter));
-
-  // write test message
-  if (!write_message(0, NULL, 0))
-  {
+  rx_frames_.resize(kMaxCanFrames);
+  try {
+    pi3hat_ = std::make_unique<mjbots::pi3hat::Pi3Hat>(make_configuration(can_bus));
+  } catch (const std::exception & exception) {
     RCLCPP_ERROR(
-      rclcpp::get_logger("CubeMarsSystemHardware"),
-      "Test message failed");
+      rclcpp::get_logger(kLogger),
+      "Could not initialize pi3hat: %s",
+      exception.what());
+    pi3hat_.reset();
     return false;
   }
-
   return true;
 }
 
 bool CanSocket::disconnect()
 {
-  if (close(socket_) < 0)
-  {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("CubeMarsSystemHardware"),
-      "Could not close CAN socket");
-    return false;
-  }
+  received_frames_.clear();
+  tx_frames_.clear();
+  rx_frames_.clear();
+  pi3hat_.reset();
   return true;
 }
 
 bool CanSocket::read_nonblocking(std::uint32_t & id, std::uint8_t data[], std::uint8_t & len)
 {
-  struct can_frame frame;
-  if (recv(socket_, &frame, sizeof(struct can_frame), MSG_DONTWAIT) < 0)
-  {
-    if (errno == EAGAIN)
-    {
-      // no message in buffer
-    }
-    else
-    {
-      RCLCPP_ERROR(
-        rclcpp::get_logger("CubeMarsSystemHardware"),
-        "Could not read CAN socket");
-    }
+  if (received_frames_.empty()) {
     return false;
   }
 
-  memcpy(data, frame.data, frame.len);
-  id = frame.can_id & can_mask_;
-  len = frame.len;
+  const auto frame = received_frames_.front();
+  received_frames_.pop_front();
+  const auto copy_len = std::min<std::size_t>(frame.size, 8);
+  std::memcpy(data, frame.data, copy_len);
+  id = frame.id & can_mask_;
+  len = static_cast<std::uint8_t>(copy_len);
 
+  return true;
+}
+
+bool CanSocket::poll()
+{
+  if (!pi3hat_ || can_bus_ == 0) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "pi3hat CAN transport is not ready");
+    return false;
+  }
+
+  mjbots::pi3hat::Pi3Hat::Input input;
+  input.tx_can = mjbots::pi3hat::Span<mjbots::pi3hat::CanFrame>();
+  input.rx_can = mjbots::pi3hat::Span<mjbots::pi3hat::CanFrame>(
+    rx_frames_.data(), rx_frames_.size());
+  input.force_can_check = 1U << can_bus_;
+
+  const auto output = pi3hat_->Cycle(input);
+  if (output.error != 0) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLogger),
+      "pi3hat receive cycle failed with error code: %d",
+      output.error);
+    return false;
+  }
+
+  for (std::size_t i = 0; i < output.rx_can_size; ++i) {
+    received_frames_.push_back(rx_frames_[i]);
+  }
   return true;
 }
 
 bool CanSocket::write_message(std::uint32_t id, const std::uint8_t data[], std::uint8_t len)
 {
-  struct can_frame frame;
-  frame.can_id = id | CAN_EFF_FLAG;
-  frame.len = len;
-  memcpy(frame.data, data, len);
-  if (write(socket_, &frame, sizeof(struct can_frame)) != sizeof(struct can_frame))
-  {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("CubeMarsSystemHardware"),
-      "Could not write message to CAN socket");
+  if (!pi3hat_ || can_bus_ == 0 || len > 8) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLogger), "pi3hat CAN transport is not ready");
     return false;
+  }
+
+  mjbots::pi3hat::CanFrame frame;
+  frame.id = id;
+  frame.bus = can_bus_;
+  frame.size = len;
+  frame.expect_reply = false;
+  frame.expected_reply_size = 0;
+  std::memcpy(frame.data, data, len);
+  tx_frames_.assign(1, frame);
+
+  mjbots::pi3hat::Pi3Hat::Input input;
+  input.tx_can = mjbots::pi3hat::Span<mjbots::pi3hat::CanFrame>(
+    tx_frames_.data(), tx_frames_.size());
+  input.rx_can = mjbots::pi3hat::Span<mjbots::pi3hat::CanFrame>(
+    rx_frames_.data(), rx_frames_.size());
+  input.force_can_check = 1U << can_bus_;
+
+  const auto output = pi3hat_->Cycle(input);
+  if (output.error != 0) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLogger),
+      "pi3hat CAN cycle failed with error code: %d",
+      output.error);
+    return false;
+  }
+
+  for (std::size_t i = 0; i < output.rx_can_size; ++i) {
+    received_frames_.push_back(rx_frames_[i]);
   }
   return true;
 }
