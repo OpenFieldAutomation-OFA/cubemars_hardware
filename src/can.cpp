@@ -7,8 +7,6 @@
 
 namespace cubemars_hardware
 {
-namespace
-{
 constexpr const char * kLogger = "CubeMarsSystemHardware";
 constexpr std::size_t kMaxCanFrames = 32;
 
@@ -24,7 +22,6 @@ mjbots::pi3hat::Pi3Hat::Configuration make_configuration(int can_bus)
   mjbots::pi3hat::Pi3Hat::Configuration configuration;
   configuration.can[can_bus - 1] = can_config;
   return configuration;
-}
 }
 
 bool CanSocket::connect(
