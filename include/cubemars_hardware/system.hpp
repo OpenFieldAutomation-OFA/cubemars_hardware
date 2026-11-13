@@ -16,6 +16,7 @@
 #include "rclcpp_lifecycle/state.hpp"
 #include "cubemars_hardware/visibility_control.h"
 #include "cubemars_hardware/can.hpp"
+#include "cubemars_hardware/position_unwrapper.hpp"
 
 namespace cubemars_hardware
 {
@@ -89,6 +90,7 @@ private:
   std::vector<double> max_velocity_limits_;
   std::vector<std::pair<std::int16_t, std::int16_t>> limits_;
   std::vector<bool> read_only_;
+  std::vector<PositionUnwrapper> position_unwrappers_;
 
   CanSocket can_;
   int can_bus_{0};
