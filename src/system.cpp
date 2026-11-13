@@ -16,6 +16,13 @@ namespace
 {
 constexpr double kDefaultMaxCurrent = 18.0;
 constexpr double kDefaultMaxTorque = 18.0;
+// Servo-mode status frames are sent with extended ID 0x2900 | driver_id.
+constexpr std::uint32_t kStatusFrameMask = 0xFFFFU;
+constexpr std::uint32_t kStatusFrameBase = 0x2900U;
+// Raw current is int16 in 0.01 A units. Frames above this are treated as corrupt.
+// Manual (v1.0.18, 5.2.1): current is int16 in 0.01 A, valid range -6000..6000 (+-60 A).
+constexpr double kMaxRawCurrent = 6000.0;
+constexpr double kMaxPlausibleRawCurrentFactor = 3.0;
 constexpr double kDefaultMaxVelocity = 300.0 * 2.0 * M_PI / 60.0;
 
 double get_joint_limit(
@@ -170,7 +177,7 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_configure(
     unwrapper.reset();
   }
 
-  const hardware_interface::CallbackReturn result = can_.connect(can_bus_, can_ids_, 0xFFU)
+  const hardware_interface::CallbackReturn result = can_.connect(can_bus_, can_ids_, kStatusFrameMask)
                                                       ? hardware_interface::CallbackReturn::SUCCESS
                                                       : hardware_interface::CallbackReturn::FAILURE;
 
@@ -360,6 +367,13 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
   // read all buffered CAN messages
   while (can_.read_nonblocking(read_id, read_data, read_len))
   {
+    // Only accept full 8-byte servo status frames (ID 0x29xx). Anything else (short frames,
+    // other packet types sharing the low ID byte) would otherwise be decoded as garbage.
+    if (read_len != 8 || (read_id & 0xFF00U) != kStatusFrameBase)
+    {
+      continue;
+    }
+    read_id &= 0xFFU;
     if (read_data[7] != 0)
     {
       switch(read_data[7])
@@ -385,13 +399,27 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
         case 7:
           RCLCPP_ERROR(rclcpp::get_logger("CubeMarsSystemHardware"), "Motor stall.");
           break;
-        return hardware_interface::return_type::ERROR;
+        default:
+          break;
       }
+      return hardware_interface::return_type::ERROR;
     }
     auto it = std::find(can_ids_.begin(), can_ids_.end(), read_id);
     if (it != can_ids_.end())
     {
       int i = std::distance(can_ids_.begin(), it);
+      const std::int16_t raw_current = static_cast<std::int16_t>(read_data[4] << 8 | read_data[5]);
+      const double raw_current_limit = std::min(
+        kMaxRawCurrent, kMaxPlausibleRawCurrentFactor * max_current_limits_[i] * 100.0);
+      if (std::abs(static_cast<double>(raw_current)) > raw_current_limit)
+      {
+        RCLCPP_WARN(
+          rclcpp::get_logger("CubeMarsSystemHardware"),
+          "Dropping implausible frame joint %d: raw current %d, bytes %02x %02x %02x %02x %02x %02x %02x %02x",
+          i, raw_current, read_data[0], read_data[1], read_data[2], read_data[3],
+          read_data[4], read_data[5], read_data[6], read_data[7]);
+        continue;
+      }
       all_ids[i] = true;
       pos_int = static_cast<std::int16_t>(read_data[0] << 8 | read_data[1]);
       // Unwrap each frame in order into a continuous multi-turn position (0.1 deg counts);
@@ -399,7 +427,7 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
       hw_states_positions_[i] = position_unwrappers_[i].update(pos_int);
       hw_states_temperatures_[i] = read_data[6];
       hw_states_velocities_[i] = std::int16_t (read_data[2] << 8 | read_data[3]);
-      hw_states_efforts_[i] = std::int16_t (read_data[4] << 8 | read_data[5]);
+      hw_states_efforts_[i] = raw_current;
     }
   }
 
@@ -419,8 +447,8 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
       hw_states_positions_[i] = hw_states_positions_[i] * 0.1 * M_PI / 180 - enc_offs_[i];
       hw_states_velocities_[i] = hw_states_velocities_[i] * 10 / erpm_conversions_[i];
       hw_states_efforts_[i] = hw_states_efforts_[i] * 0.01 * torque_constants_[i] *
-        std::stoi(info_.joints[i].parameters.at("gear_ratio"));
-      if (trq_limits_[i] != 0 && hw_states_efforts_[i] > trq_limits_[i])
+        std::stod(info_.joints[i].parameters.at("gear_ratio"));
+      if (trq_limits_[i] != 0 && std::abs(hw_states_efforts_[i]) > trq_limits_[i])
       {
         RCLCPP_ERROR(rclcpp::get_logger("CubeMarsSystemHardware"),
           "Joint %lu went over torque limit.", i);
