@@ -68,6 +68,7 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
   hw_commands_accelerations_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
   hw_commands_efforts_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
   control_mode_.resize(info_.joints.size(), control_mode_t::UNDEFINED);
+  position_unwrappers_.resize(info_.joints.size());
 
   for (const hardware_interface::ComponentInfo & joint : info_.joints)
   {
@@ -165,6 +166,10 @@ hardware_interface::CallbackReturn CubeMarsSystemHardware::on_init(
 hardware_interface::CallbackReturn CubeMarsSystemHardware::on_configure(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
+  for (auto & unwrapper : position_unwrappers_) {
+    unwrapper.reset();
+  }
+
   const hardware_interface::CallbackReturn result = can_.connect(can_bus_, can_ids_, 0xFFU)
                                                       ? hardware_interface::CallbackReturn::SUCCESS
                                                       : hardware_interface::CallbackReturn::FAILURE;
@@ -324,6 +329,10 @@ hardware_interface::return_type CubeMarsSystemHardware::perform_command_mode_swi
 hardware_interface::CallbackReturn CubeMarsSystemHardware::on_activate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
+  // Re-anchor the multi-turn position on the first frame after activation.
+  for (auto & unwrapper : position_unwrappers_) {
+    unwrapper.reset();
+  }
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -384,14 +393,11 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
     {
       int i = std::distance(can_ids_.begin(), it);
       all_ids[i] = true;
-      pos_int = read_data[0] << 8 | read_data[1];
-      if (std::abs(pos_int) >= 32000)
-      {
-        RCLCPP_INFO(
-          rclcpp::get_logger("CubeMarsSystemHardware"),
-          "Position has reached maximum possible value.");
-      }
-      hw_states_positions_[i] = pos_int;
+      pos_int = static_cast<std::int16_t>(read_data[0] << 8 | read_data[1]);
+      // Unwrap each frame in order into a continuous multi-turn position (0.1 deg counts);
+      // converted to radians below.
+      hw_states_positions_[i] = position_unwrappers_[i].update(pos_int);
+      hw_states_temperatures_[i] = read_data[6];
       hw_states_velocities_[i] = std::int16_t (read_data[2] << 8 | read_data[3]);
       hw_states_efforts_[i] = std::int16_t (read_data[4] << 8 | read_data[5]);
     }
@@ -414,7 +420,6 @@ hardware_interface::return_type CubeMarsSystemHardware::read(
       hw_states_velocities_[i] = hw_states_velocities_[i] * 10 / erpm_conversions_[i];
       hw_states_efforts_[i] = hw_states_efforts_[i] * 0.01 * torque_constants_[i] *
         std::stoi(info_.joints[i].parameters.at("gear_ratio"));
-      hw_states_temperatures_[i] = read_data[6];
       if (trq_limits_[i] != 0 && hw_states_efforts_[i] > trq_limits_[i])
       {
         RCLCPP_ERROR(rclcpp::get_logger("CubeMarsSystemHardware"),
